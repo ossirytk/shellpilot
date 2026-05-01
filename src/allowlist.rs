@@ -21,13 +21,16 @@ pub fn config_path() -> PathBuf {
 }
 
 /// Conservative default command set — no wrappers that can exec arbitrary binaries.
+///
+/// Intentionally excludes commands covered by structured MCP tools:
+/// - `cat`, `head`, `tail`, `wc`, `ls`, `grep` → use toolpilot (fs_glob, fs_tree, text_search)
+/// - `git` → use gitpilot
+/// Add them back via the allowlist config if you need raw shell access to them.
 pub fn default_commands() -> Vec<String> {
-    [
-        "cat", "date", "echo", "grep", "head", "ls", "pwd", "tail", "wc", "which", "whoami",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
+    ["date", "echo", "pwd", "which", "whoami"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 /// Load the allowlist from `path`.
@@ -105,8 +108,8 @@ mod tests {
     fn defaults_include_safe_commands() {
         let defaults = default_commands();
         assert!(defaults.contains(&"echo".to_string()));
-        assert!(defaults.contains(&"ls".to_string()));
-        assert!(defaults.contains(&"cat".to_string()));
+        assert!(defaults.contains(&"date".to_string()));
+        assert!(defaults.contains(&"whoami".to_string()));
     }
 
     #[test]
@@ -122,6 +125,19 @@ mod tests {
         );
         assert!(!defaults.contains(&"rm".to_string()));
         assert!(!defaults.contains(&"sudo".to_string()));
+    }
+
+    #[test]
+    fn defaults_exclude_toolpilot_covered_commands() {
+        let defaults = default_commands();
+        // These are covered by toolpilot structured tools — keep them out of defaults
+        // so agents use the structured alternatives instead.
+        for cmd in &["cat", "grep", "head", "tail", "wc", "ls"] {
+            assert!(
+                !defaults.contains(&cmd.to_string()),
+                "'{cmd}' should not be in defaults — use toolpilot instead"
+            );
+        }
     }
 
     #[test]

@@ -21,7 +21,7 @@ pub fn tool_definitions() -> Value {
         "tools": [
             {
                 "name": "run",
-                "description": "Execute an allowlisted shell command safely.",
+                "description": "Execute an allowlisted shell command safely. Prefer toolpilot for file operations and gitpilot for git — use this only for commands not covered by a structured tool.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {

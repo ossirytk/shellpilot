@@ -40,7 +40,14 @@ async fn handle_request(request: RpcRequest) -> Option<RpcResponse> {
                 .and_then(Value::as_str)
                 .unwrap_or("2024-11-05"),
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "shellpilot", "version": "0.1.0"}
+            "serverInfo": {"name": "shellpilot", "version": "0.1.0"},
+            "instructions": (
+                "shellpilot is a safe subprocess runner — use it only for commands not covered \
+                 by a structured MCP tool. Prefer toolpilot for file search and inspection \
+                 (fs_glob, fs_tree, text_search), and gitpilot for all git operations. \
+                 Before calling 'run', check 'list_allowed' to confirm the command is permitted. \
+                 Every invocation is recorded in the audit log regardless of outcome."
+            )
         })),
         "tools/list" => Some(tools::tool_definitions()),
         "tools/call" => {
