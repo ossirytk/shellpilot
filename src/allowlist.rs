@@ -64,7 +64,7 @@ pub fn load() -> io::Result<Vec<String>> {
     let commands = load_from(&path)?;
     // First run: persist the defaults so the user can inspect/edit them.
     if !path.exists() {
-        let _ = save_to(&path, &commands);
+        save_to(&path, &commands)?;
     }
     Ok(commands)
 }

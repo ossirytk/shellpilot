@@ -52,19 +52,34 @@ pub fn append(entry: &AuditEntry) -> io::Result<()> {
 }
 
 /// Return the last `limit` entries from `path`.
+///
+/// Lines are streamed one at a time via `BufReader` so the entire log file is
+/// never loaded into memory at once. Only the last `limit` parsed entries are
+/// retained in memory, regardless of the total log size.
 pub fn read_recent_from(path: &Path, limit: usize) -> io::Result<Vec<AuditEntry>> {
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
+    use std::collections::VecDeque;
+    use std::io::BufRead as _;
+
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
         Err(e) => return Err(e),
     };
-    let entries: Vec<AuditEntry> = content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect();
-    let start = entries.len().saturating_sub(limit);
-    Ok(entries[start..].to_vec())
+    let reader = io::BufReader::new(file);
+    let mut ring: VecDeque<AuditEntry> = VecDeque::with_capacity(limit.saturating_add(1));
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(entry) = serde_json::from_str::<AuditEntry>(&line) {
+            if limit > 0 && ring.len() >= limit {
+                ring.pop_front();
+            }
+            ring.push_back(entry);
+        }
+    }
+    Ok(ring.into_iter().collect())
 }
 
 /// Return the last `limit` entries from the default log path.

@@ -20,11 +20,14 @@ shellpilot is a single Rust binary that exposes a curated set of shell commands 
 
 ### Allowlist
 
-On first run, shellpilot creates a default allowlist at:
+On first run, shellpilot creates a default allowlist at a platform-dependent location
+determined by the [`dirs`](https://docs.rs/dirs) crate:
 
-```
-~/.config/shellpilot/allowlist.json
-```
+| Platform | Typical path |
+|----------|-------------|
+| Linux    | `~/.config/shellpilot/allowlist.json` (respects `$XDG_CONFIG_HOME`) |
+| macOS    | `~/Library/Application Support/shellpilot/allowlist.json` |
+| Windows  | `%APPDATA%\shellpilot\allowlist.json` |
 
 Default allowed commands: `cat`, `date`, `echo`, `grep`, `head`, `ls`, `pwd`, `tail`, `wc`, `which`, `whoami`
 
@@ -34,11 +37,14 @@ Edit this file to add or remove commands. The server re-reads it on every invoca
 
 ### Audit log
 
-Every invocation (including denied and failed ones) is appended to:
+Every invocation (including denied and failed ones) is appended to a platform-dependent
+location determined by the [`dirs`](https://docs.rs/dirs) crate:
 
-```
-~/.local/share/shellpilot/audit.log
-```
+| Platform | Typical path |
+|----------|-------------|
+| Linux    | `~/.local/share/shellpilot/audit.log` (respects `$XDG_DATA_HOME`) |
+| macOS    | `~/Library/Application Support/shellpilot/audit.log` |
+| Windows  | `%LOCALAPPDATA%\shellpilot\audit.log` |
 
 Each entry is a JSON line with: `ts`, `command`, `args`, `cwd`, `exit_code`, `outcome`, `duration_ms`.
 

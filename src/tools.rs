@@ -84,6 +84,30 @@ pub async fn dispatch(params: &Value) -> Value {
 }
 
 async fn handle_run(args: Value) -> Value {
+    handle_run_impl(args, None, None).await
+}
+
+/// Inner implementation of `run` that accepts optional override paths for
+/// hermetic testing (production code passes `None` for both).
+async fn handle_run_impl(
+    args: Value,
+    allowlist_path: Option<&std::path::Path>,
+    audit_path: Option<&std::path::Path>,
+) -> Value {
+    // Helper: append an audit entry to the configured path.
+    macro_rules! audit {
+        ($entry:expr) => {
+            match audit_path {
+                Some(p) => {
+                    let _ = audit::append_to(p, &$entry);
+                }
+                None => {
+                    let _ = audit::append(&$entry);
+                }
+            }
+        };
+    }
+
     let ts = audit::now_iso8601();
     let start = Instant::now();
 
@@ -97,23 +121,36 @@ async fn handle_run(args: Value) -> Value {
         }
     };
 
-    let cmd_args: Vec<String> = args
-        .get("args")
-        .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
+    let cmd_args: Vec<String> = match args.get("args").and_then(Value::as_array) {
+        Some(a) => {
+            let mut parsed_args = Vec::with_capacity(a.len());
+            for (index, value) in a.iter().enumerate() {
+                match value.as_str() {
+                    Some(s) => parsed_args.push(s.to_string()),
+                    None => {
+                        return json!({"error": {
+                            "code": "InvalidArgument",
+                            "message": format!("'args[{}]' must be a string", index)
+                        }});
+                    }
+                }
+            }
+            parsed_args
+        }
+        None => Vec::new(),
+    };
 
     let cwd: Option<String> = args.get("cwd").and_then(Value::as_str).map(String::from);
 
     // Check allowlist — audit denied attempts.
-    let allowed = match allowlist::is_allowed(&command) {
+    let allowed = match allowlist_path {
+        Some(p) => allowlist::is_allowed_in(&command, p),
+        None => allowlist::is_allowed(&command),
+    };
+    let allowed = match allowed {
         Ok(v) => v,
         Err(e) => {
-            let _ = audit::append(&audit::AuditEntry {
+            audit!(audit::AuditEntry {
                 ts,
                 command,
                 args: cmd_args,
@@ -126,7 +163,7 @@ async fn handle_run(args: Value) -> Value {
         }
     };
     if !allowed {
-        let _ = audit::append(&audit::AuditEntry {
+        audit!(audit::AuditEntry {
             ts,
             command: command.clone(),
             args: cmd_args,
@@ -142,8 +179,11 @@ async fn handle_run(args: Value) -> Value {
     }
 
     // Spawn the subprocess with piped I/O.
+    // Use a minimal trusted PATH to prevent PATH-injection attacks where a
+    // malicious binary earlier in the caller's PATH shadows the intended one.
     let mut cmd = tokio::process::Command::new(&command);
     cmd.args(&cmd_args)
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(ref dir) = cwd {
@@ -153,7 +193,7 @@ async fn handle_run(args: Value) -> Value {
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            let _ = audit::append(&audit::AuditEntry {
+            audit!(audit::AuditEntry {
                 ts,
                 command,
                 args: cmd_args,
@@ -186,7 +226,7 @@ async fn handle_run(args: Value) -> Value {
             let stdout_bytes = stdout_task.await.unwrap_or_default();
             let stderr_bytes = stderr_task.await.unwrap_or_default();
             let duration_ms = start.elapsed().as_millis();
-            let _ = audit::append(&audit::AuditEntry {
+            audit!(audit::AuditEntry {
                 ts,
                 command: command.clone(),
                 args: cmd_args,
@@ -208,18 +248,30 @@ async fn handle_run(args: Value) -> Value {
             });
         }
         Ok(Err(e)) => {
-            stdout_task.abort();
-            stderr_task.abort();
-            let _ = audit::append(&audit::AuditEntry {
+            // wait() itself failed — best-effort: kill child and drain readers
+            // so no subprocess is left running and no reader task leaks.
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            let stdout_bytes = stdout_task.await.unwrap_or_default();
+            let stderr_bytes = stderr_task.await.unwrap_or_default();
+            let duration_ms = start.elapsed().as_millis();
+            audit!(audit::AuditEntry {
                 ts,
-                command,
+                command: command.clone(),
                 args: cmd_args,
                 cwd,
                 exit_code: None,
                 outcome: "error".to_string(),
-                duration_ms: start.elapsed().as_millis(),
+                duration_ms,
             });
-            return json!({"error": {"code": "WaitError", "message": e.to_string()}});
+            return json!({
+                "command": command,
+                "exit_code": null,
+                "stdout": format_output(stdout_bytes),
+                "stderr": format_output(stderr_bytes),
+                "duration_ms": duration_ms,
+                "error": {"code": "WaitError", "message": e.to_string()}
+            });
         }
         Ok(Ok(status)) => (status.code(), if status.success() { "ok" } else { "error" }),
     };
@@ -228,7 +280,7 @@ async fn handle_run(args: Value) -> Value {
     let stderr_bytes = stderr_task.await.unwrap_or_default();
     let duration_ms = start.elapsed().as_millis();
 
-    let _ = audit::append(&audit::AuditEntry {
+    audit!(audit::AuditEntry {
         ts,
         command: command.clone(),
         args: cmd_args,
@@ -247,14 +299,25 @@ async fn handle_run(args: Value) -> Value {
     })
 }
 
-/// Read up to `MAX_OUTPUT_BYTES` from `reader` into a `Vec<u8>`.
-async fn read_capped(reader: impl tokio::io::AsyncRead + Unpin) -> Vec<u8> {
+/// Read from `reader` until EOF, buffering at most `MAX_OUTPUT_BYTES + 1` bytes.
+///
+/// The reader is drained to EOF regardless of the cap so that the child process
+/// does not receive SIGPIPE/EPIPE from a prematurely closed pipe.
+async fn read_capped(mut reader: impl tokio::io::AsyncRead + Unpin) -> Vec<u8> {
     let mut buf = Vec::new();
-    // Read one byte beyond the cap so we know whether truncation occurred.
-    let _ = reader
-        .take((MAX_OUTPUT_BYTES + 1) as u64)
-        .read_to_end(&mut buf)
-        .await;
+    let mut chunk = [0_u8; 8192];
+    loop {
+        match reader.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                if buf.len() < MAX_OUTPUT_BYTES + 1 {
+                    let remaining = (MAX_OUTPUT_BYTES + 1) - buf.len();
+                    buf.extend_from_slice(&chunk[..remaining.min(n)]);
+                }
+                // Continue reading (and discarding) until EOF to avoid SIGPIPE.
+            }
+        }
+    }
     buf
 }
 
@@ -273,7 +336,15 @@ fn format_output(bytes: Vec<u8>) -> String {
 }
 
 fn handle_list_allowed() -> Value {
-    match allowlist::load() {
+    handle_list_allowed_impl(None)
+}
+
+fn handle_list_allowed_impl(allowlist_path: Option<&std::path::Path>) -> Value {
+    let result = match allowlist_path {
+        Some(p) => allowlist::load_from(p),
+        None => allowlist::load(),
+    };
+    match result {
         Ok(commands) => json!({"commands": commands}),
         Err(e) => json!({"error": {"code": "AllowlistError", "message": e.to_string()}}),
     }
@@ -333,7 +404,11 @@ mod tests {
 
     #[test]
     fn list_allowed_returns_command_list() {
-        let result = handle_list_allowed();
+        // Use a temp path so the test never touches the real user config directory.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("allowlist.json");
+        // No file pre-created — load_from returns defaults for a missing file.
+        let result = handle_list_allowed_impl(Some(&path));
         let commands = result["commands"].as_array();
         assert!(commands.is_some(), "should have a 'commands' array");
         assert!(!commands.unwrap().is_empty());
@@ -341,9 +416,21 @@ mod tests {
 
     #[tokio::test]
     async fn run_echo_produces_output() {
-        // "echo" is in the default allowlist.
-        let result = handle_run(json!({"command": "echo", "args": ["hello"]})).await;
-        // Only check output structure; skip if echo is not on this system's allowlist.
+        // Use temp dirs for both the allowlist and the audit log so the test
+        // never touches the real user config/data directories.
+        let dir = tempfile::tempdir().unwrap();
+        let allowlist_path = dir.path().join("allowlist.json");
+        let audit_path = dir.path().join("audit.log");
+        // Pre-populate the allowlist so "echo" is permitted.
+        allowlist::save_to(&allowlist_path, &allowlist::default_commands()).unwrap();
+
+        let result = handle_run_impl(
+            json!({"command": "echo", "args": ["hello"]}),
+            Some(&allowlist_path),
+            Some(&audit_path),
+        )
+        .await;
+
         if result.get("error").is_none() {
             assert!(result["stdout"].as_str().unwrap().contains("hello"));
             assert_eq!(result["exit_code"], 0);
