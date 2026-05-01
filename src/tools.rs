@@ -179,13 +179,15 @@ async fn handle_run_impl(
     }
 
     // Spawn the subprocess with piped I/O.
-    // Use a minimal trusted PATH to prevent PATH-injection attacks where a
-    // malicious binary earlier in the caller's PATH shadows the intended one.
+    // On Unix, override PATH with a minimal trusted set to prevent PATH-injection
+    // attacks where a malicious binary earlier in the caller's PATH shadows the
+    // intended one.  On other platforms (e.g. Windows) leave PATH unchanged.
     let mut cmd = tokio::process::Command::new(&command);
     cmd.args(&cmd_args)
-        .env("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(unix)]
+    cmd.env("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
     if let Some(ref dir) = cwd {
         cmd.current_dir(dir);
     }
@@ -306,13 +308,15 @@ async fn handle_run_impl(
 async fn read_capped(mut reader: impl tokio::io::AsyncRead + Unpin) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut chunk = [0_u8; 8192];
+    let mut remaining = MAX_OUTPUT_BYTES + 1;
     loop {
         match reader.read(&mut chunk).await {
             Ok(0) | Err(_) => break,
             Ok(n) => {
-                if buf.len() < MAX_OUTPUT_BYTES + 1 {
-                    let remaining = (MAX_OUTPUT_BYTES + 1) - buf.len();
-                    buf.extend_from_slice(&chunk[..remaining.min(n)]);
+                if remaining > 0 {
+                    let to_copy = remaining.min(n);
+                    buf.extend_from_slice(&chunk[..to_copy]);
+                    remaining -= to_copy;
                 }
                 // Continue reading (and discarding) until EOF to avoid SIGPIPE.
             }
