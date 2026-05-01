@@ -1,5 +1,7 @@
 //! shellpilot — safe subprocess runner MCP server.
 
+mod allowlist;
+mod audit;
 mod tools;
 
 use std::io;
@@ -27,7 +29,7 @@ struct RpcResponse {
     error: Option<Value>,
 }
 
-fn handle_request(request: RpcRequest) -> Option<RpcResponse> {
+async fn handle_request(request: RpcRequest) -> Option<RpcResponse> {
     // Notifications (no id) must not receive a response.
     let id = request.id?;
 
@@ -42,7 +44,7 @@ fn handle_request(request: RpcRequest) -> Option<RpcResponse> {
         })),
         "tools/list" => Some(tools::tool_definitions()),
         "tools/call" => {
-            let payload = tools::dispatch(&request.params);
+            let payload = tools::dispatch(&request.params).await;
             let text = serde_json::to_string(&payload).unwrap_or_default();
             Some(json!({
                 "content": [{"type": "text", "text": text}],
@@ -54,7 +56,12 @@ fn handle_request(request: RpcRequest) -> Option<RpcResponse> {
     };
 
     if let Some(result) = result {
-        Some(RpcResponse { jsonrpc: "2.0", id, result: Some(result), error: None })
+        Some(RpcResponse {
+            jsonrpc: "2.0",
+            id,
+            result: Some(result),
+            error: None,
+        })
     } else {
         Some(RpcResponse {
             jsonrpc: "2.0",
@@ -115,7 +122,7 @@ pub async fn run() -> io::Result<()> {
             }
         };
 
-        if let Some(response) = handle_request(request) {
+        if let Some(response) = handle_request(request).await {
             let mut out = serde_json::to_vec(&response).unwrap_or_default();
             out.push(b'\n');
             writer.write_all(&out).await?;
