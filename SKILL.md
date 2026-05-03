@@ -11,9 +11,9 @@ shellpilot is a Rust binary that executes commands from a configurable allowlist
 
 | Tool | When to use |
 |------|-------------|
-| `shellpilot-run` | Execute an allowlisted command. Required: `command`, `args` (array). Optional: `cwd`. Returns `stdout`, `stderr`, `exit_code`, `duration_ms`. |
-| `shellpilot-list_allowed` | Return the current command allowlist. Use to check what's permitted before attempting a run. |
-| `shellpilot-audit_log` | Retrieve recent audit log entries. Includes denied and failed attempts. |
+| `run` | Execute an allowlisted command. Required: `command`. Optional: `args` (array), `cwd`. Returns `stdout`, `stderr`, `exit_code`, `duration_ms`. |
+| `list_allowed` | Return the current command allowlist. Use to check what's permitted before attempting a run. |
+| `audit_log` | Retrieve recent audit log entries. Includes denied and failed attempts. |
 
 ## Default Allowlist
 
@@ -23,7 +23,7 @@ Commands covered by structured MCP tools are intentionally excluded:
 - `cat`, `head`, `tail`, `wc`, `ls`, `grep` → use **toolpilot** instead
 - `git` → use **gitpilot** instead
 
-Edit `~/.config/shellpilot/allowlist.json` to add or remove commands. Re-read on every call — no restart needed.
+Edit the platform-dependent allowlist config file to add or remove commands (see the README for paths per OS). Re-read on every call — no restart needed.
 
 ## Guidance
 
