@@ -29,7 +29,13 @@ determined by the [`dirs`](https://docs.rs/dirs) crate:
 | macOS    | `~/Library/Application Support/shellpilot/allowlist.json` |
 | Windows  | `%APPDATA%\shellpilot\allowlist.json` |
 
-Default allowed commands: `cat`, `date`, `echo`, `grep`, `head`, `ls`, `pwd`, `tail`, `wc`, `which`, `whoami`
+Default allowed commands: `date`, `echo`, `pwd`, `which`, `whoami`
+
+Commands covered by structured MCP tools are intentionally excluded from the defaults:
+- `cat`, `head`, `tail`, `wc`, `ls`, `grep` → use **toolpilot** (`fs_tree`, `fs_glob`, `text_search`)
+- `git` → use **gitpilot**
+
+Add them back via the allowlist config file if you need raw shell access to them.
 
 Edit this file to add or remove commands. The server re-reads it on every invocation, so changes take effect immediately without restarting.
 

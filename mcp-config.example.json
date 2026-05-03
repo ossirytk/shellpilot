@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "shellpilot": {
+      "type": "stdio",
+      "command": "/path/to/shellpilot/target/release/shellpilot",
+      "args": [],
+      "tools": ["*"]
+    }
+  }
+}
