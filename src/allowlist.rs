@@ -25,6 +25,7 @@ pub fn config_path() -> PathBuf {
 /// Intentionally excludes commands covered by structured MCP tools:
 /// - `cat`, `head`, `tail`, `wc`, `ls`, `grep` → use toolpilot (fs_glob, fs_tree, text_search)
 /// - `git` → use gitpilot
+///
 /// Add them back via the allowlist config if you need raw shell access to them.
 pub fn default_commands() -> Vec<String> {
     ["date", "echo", "pwd", "which", "whoami"]
